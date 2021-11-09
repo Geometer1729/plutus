@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE PartialTypeSignatures     #-}
 {-# LANGUAGE RankNTypes                #-}
+{-# LANGUAGE TypeApplications          #-}
 
 module Main (main) where
 
@@ -16,7 +17,6 @@ import PlutusCore.Evaluation.Machine.ExMemory (ExCPU (..), ExMemory (..))
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
 import Data.Foldable (asum)
-import Data.Functor (void)
 import Data.List (nub)
 import Data.List.Split (splitOn)
 import Data.Maybe (fromJust)
@@ -25,6 +25,9 @@ import UntypedPlutusCore qualified as UPLC
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as Cek
 
 import Control.DeepSeq (NFData, rnf)
+import Control.Lens
+import Control.Monad.Except
+import Data.Either
 import Data.Text qualified as T
 import Options.Applicative
 import System.Exit (exitFailure)
@@ -157,7 +160,7 @@ runApply :: ApplyOptions -> IO ()
 runApply (ApplyOptions inputfiles ifmt outp ofmt mode) = do
   scripts <- mapM ((getProgram ifmt ::  Input -> IO (UplcProg PLC.AlexPosn)) . FileInput) inputfiles
   let appliedScript =
-        case map (\case p -> () <$ p) scripts of
+        case void <$> scripts of
           []          -> errorWithoutStackTrace "No input files"
           progAndargs -> foldl1 UPLC.applyProgram progAndargs
   writeProgram outp ofmt mode appliedScript
@@ -167,7 +170,7 @@ runApply (ApplyOptions inputfiles ifmt outp ofmt mode) = do
 runEval :: EvalOptions -> IO ()
 runEval (EvalOptions inp ifmt printMode budgetMode traceMode outputMode timingMode cekModel) = do
     prog <- getProgram ifmt inp
-    let term = void . UPLC.toTerm $ prog
+    let term = void $ prog ^. UPLC.progTerm
         !_ = rnf term
         cekparams = case cekModel of
                     Default -> PLC.defaultCekParameters  -- AST nodes are charged according to the default cost model
@@ -185,7 +188,7 @@ runEval (EvalOptions inp ifmt printMode budgetMode traceMode outputMode timingMo
     case budgetM of
         SomeBudgetMode bm -> evalWithTiming term >>= handleResults term
             where
-                evaluate = Cek.runCek cekparams bm emitM
+                evaluate = Cek.runCek cekparams bm emitM . fromRight (error "input contains free variables") . runExcept @UPLC.FreeVariableError . UPLC.deBruijnTerm
                 evalWithTiming t = case timingMode of
                         NoTiming -> pure $ evaluate t
                         Timing n -> do
@@ -194,7 +197,7 @@ runEval (EvalOptions inp ifmt printMode budgetMode traceMode outputMode timingMo
                                 [a] -> pure a
                                 _   -> error "Timing evaluations returned inconsistent results"
                 handleResults t (res, budget, logs) = do
-                    case res of
+                    case Cek.unDeBruijnResult res of
                         Left err -> hPrint stderr err >> exitFailure
                         Right v  -> writeToFileOrStd outputMode (show (getPrintMethod printMode v))
                     case budgetMode of

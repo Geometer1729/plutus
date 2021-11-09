@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds        #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies     #-}
 {-# LANGUAGE TypeOperators    #-}
 
@@ -23,10 +24,13 @@ import UntypedPlutusCore
 import UntypedPlutusCore.Evaluation.Machine.Cek hiding (evaluateCek, unsafeEvaluateCek)
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as Cek
 
+import Control.Monad.Except
 import Data.Text (Text)
 
 -- We do not use qualified import because the whole module contains off-chain code
 import Prelude as Haskell
+
+-- TODO: remove most of these functions
 
 -- | Evaluate a program in the CEK machine with the usual text dynamic builtins.
 evaluateCek
@@ -47,5 +51,10 @@ evaluateCekTrace
     => Program Name uni fun ()
     -> ([Text], TallyingSt fun, Either (CekEvaluationException uni fun) (Term Name uni fun ()))
 evaluateCekTrace (Program _ _ t) =
-    case runCek PLC.defaultCekParameters Cek.tallying Cek.logEmitter t of
-        (errOrRes, st, logs) -> (logs, st, errOrRes)
+    case runExcept @FreeVariableError $ deBruijnTerm t of
+        Left _ -> (mempty, mempty, error "freevarT")
+        Right dbt ->
+            -- Don't use 'let': https://github.com/input-output-hk/plutus/issues/3876
+            case runCek PLC.defaultCekParameters Cek.tallying Cek.logEmitter dbt of
+                -- translating back the output
+                (res, st, logs) -> (logs, st, unDeBruijnResult res)

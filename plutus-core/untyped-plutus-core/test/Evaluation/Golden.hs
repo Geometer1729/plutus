@@ -24,8 +24,11 @@ import PlutusCore.Pretty
 import UntypedPlutusCore qualified as UPLC
 import UntypedPlutusCore.Evaluation.Machine.Cek
 
+import Control.Monad
+import Control.Monad.Except (runExceptT)
 import Data.Bifunctor
 import Data.ByteString.Lazy qualified as BSL
+import Data.Either
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Test.Tasty
@@ -319,8 +322,11 @@ goldenVsPretty extn name value =
 goldenVsEvaluatedCK :: String -> Term TyName Name DefaultUni DefaultFun () -> TestTree
 goldenVsEvaluatedCK name
     = goldenVsPretty ".plc.golden" name
-    . bimap (fmap UPLC.erase) UPLC.erase
+    -- we freshen the output to match the CEK wrapper's behaviour, see 'Cek.unDeBruijnResult'
+    . bimap (fmap $ freshenViaDeBruijn . UPLC.erase) (freshenViaDeBruijn . UPLC.erase)
     . evaluateCkNoEmit defaultBuiltinsRuntime
+ where
+   freshenViaDeBruijn = fromRight (Prelude.error "mpla") . runQuote . runExceptT @FreeVariableError . (UPLC.unDeBruijnTerm <=< UPLC.deBruijnTerm)
 
 goldenVsEvaluatedCEK :: String -> Term TyName Name DefaultUni DefaultFun () -> TestTree
 goldenVsEvaluatedCEK name

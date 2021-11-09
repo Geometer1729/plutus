@@ -16,6 +16,7 @@ import PlutusTx.Evaluation qualified as PlutusTx
 import UntypedPlutusCore qualified as UPLC
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as UPLC
 
+import Control.Lens
 import Control.Monad.Except (runExceptT)
 import Control.Monad.Reader qualified as Reader
 import Data.Text qualified as Text
@@ -35,7 +36,7 @@ measureBudget :: CompiledCode a  -> Maybe PLC.ExBudget
 measureBudget compiledCode =
   let programE = PLC.runQuote
                $ runExceptT @PLC.FreeVariableError
-               $ UPLC.unDeBruijnProgram
+               $ traverseOf UPLC.progTerm UPLC.unDeBruijnTerm
                $ getPlc compiledCode
    in case programE of
         Left _ -> Nothing

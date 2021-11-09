@@ -20,6 +20,7 @@ module UntypedPlutusCore.Evaluation.Machine.Cek
     , CekUserError(..)
     , ErrorWithCause(..)
     , CekEvaluationException
+    , CekEvaluationExceptionD
     , EvaluationError(..)
     -- * Costing
     , ExBudgetCategory(..)
@@ -47,24 +48,29 @@ module UntypedPlutusCore.Evaluation.Machine.Cek
     , readKnownCek
     , Hashable
     , PrettyUni
+    , unDeBruijnResult
     )
 where
 
 import PlutusPrelude
 
 import UntypedPlutusCore.Core
+import UntypedPlutusCore.DeBruijn
 import UntypedPlutusCore.Evaluation.Machine.Cek.CekMachineCosts
 import UntypedPlutusCore.Evaluation.Machine.Cek.EmitterMode
 import UntypedPlutusCore.Evaluation.Machine.Cek.ExBudgetMode
 import UntypedPlutusCore.Evaluation.Machine.Cek.Internal
 
+import Control.Monad.Except
 import PlutusCore.Constant
 import PlutusCore.Evaluation.Machine.ExMemory
 import PlutusCore.Evaluation.Machine.Exception
 import PlutusCore.Evaluation.Machine.MachineParameters
 import PlutusCore.Name
 import PlutusCore.Pretty
+import PlutusCore.Quote
 
+import Data.Bifunctor
 import Data.Ix (Ix)
 import Data.Text (Text)
 import Universe
@@ -82,14 +88,20 @@ allow one to specify an 'ExBudgetMode'. I.e. such functions are only for fully e
 
 -- | Evaluate a term using the CEK machine with logging disabled and keep track of costing.
 runCekNoEmit
-    :: ( uni `Everywhere` ExMemoryUsage, Ix fun, PrettyUni uni fun)
+    :: ( uni `Everywhere` ExMemoryUsage, Ix fun, PrettyUni uni fun, Monoid cost)
     => MachineParameters CekMachineCosts CekValue uni fun
     -> ExBudgetMode cost uni fun
     -> Term Name uni fun ()
     -> (Either (CekEvaluationException uni fun) (Term Name uni fun ()), cost)
 runCekNoEmit params mode term =
-    case runCek params mode noEmitter term of
-        (errOrRes, cost', _) -> (errOrRes, cost')
+    -- translating input
+    case runExcept @FreeVariableError $ deBruijnTerm term of
+        Left _ -> (error "freevarI", mempty)
+        Right dbt -> do
+            -- Don't use 'let': https://github.com/input-output-hk/plutus/issues/3876
+            case runCek params mode noEmitter dbt of
+                -- translating back the output
+                (res, cost', _) -> (unDeBruijnResult res, cost')
 
 -- | Unsafely evaluate a term using the CEK machine with logging disabled and keep track of costing.
 -- May throw a 'CekMachineException'.
@@ -97,6 +109,7 @@ unsafeRunCekNoEmit
     :: ( GShow uni, Typeable uni
        , Closed uni, uni `EverywhereAll` '[ExMemoryUsage, PrettyConst]
        , Ix fun, Pretty fun, Typeable fun
+       , Monoid cost
        )
     => MachineParameters CekMachineCosts CekValue uni fun
     -> ExBudgetMode cost uni fun
@@ -114,8 +127,14 @@ evaluateCek
     -> Term Name uni fun ()
     -> (Either (CekEvaluationException uni fun) (Term Name uni fun ()), [Text])
 evaluateCek emitMode params term =
-    case runCek params restrictingEnormous emitMode term of
-         (errOrRes, _, logs) -> (errOrRes, logs)
+    -- translating input
+    case runExcept @FreeVariableError $ deBruijnTerm term of
+        Left _ -> (error "freevarI", mempty)
+        Right dbt ->
+            -- Don't use 'let': https://github.com/input-output-hk/plutus/issues/3876
+            case runCek params restrictingEnormous emitMode dbt of
+                -- translating back the output
+                (res, _, logs) -> (unDeBruijnResult res, logs)
 
 -- | Evaluate a term using the CEK machine with logging disabled.
 evaluateCekNoEmit
@@ -160,3 +179,20 @@ readKnownCek
     -> Term Name uni fun ()
     -> Either (CekEvaluationException uni fun) a
 readKnownCek params = evaluateCekNoEmit params >=> readKnownSelf
+
+-- | Temporary datatype for keeping tests the same
+-- TODO: remove when we have direct nameddebruijn/debruijn interface
+type CekEvaluationException uni fun =
+    EvaluationException CekUserError (MachineError fun) (Term Name uni fun ())
+
+-- | Temporary wrapper for keeping tests the same
+-- undebruijnifies the error-cause-term (if it exists) or the success value-term.
+-- TODO: remove when we have direct nameddebruijn/debruijn interface
+unDeBruijnResult :: Either (CekEvaluationExceptionD uni fun) (Term NamedDeBruijn uni fun ())
+                 -> Either (CekEvaluationException uni fun) (Term Name uni fun ())
+unDeBruijnResult = bimap (fmap unsafeUnDeBruijn) unsafeUnDeBruijn
+  where
+    -- FIXME: make it safe?
+    unsafeUnDeBruijn :: Term NamedDeBruijn uni fun () -> Term Name uni fun ()
+    unsafeUnDeBruijn t =  fromRight (error "unDeBruijnResult") $ runQuote $ runExceptT @FreeVariableError $ unDeBruijnTerm t
+
