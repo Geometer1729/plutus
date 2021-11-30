@@ -30,7 +30,7 @@ module UntypedPlutusCore.Evaluation.Machine.Cek.Internal
     ( EvaluationResult(..)
     , CekValue(..)
     , CekUserError(..)
-    , CekEvaluationExceptionD
+    , CekEvaluationException
     , CekBudgetSpender(..)
     , ExBudgetInfo(..)
     , ExBudgetMode(..)
@@ -44,7 +44,7 @@ module UntypedPlutusCore.Evaluation.Machine.Cek.Internal
     , StepKind(..)
     , PrettyUni
     , extractEvaluationResult
-    , runCek
+    , runCekDeBruijn
     )
 where
 
@@ -350,8 +350,9 @@ newtype CekM uni fun s a = CekM
     } deriving newtype (Functor, Applicative, Monad)
 
 -- | The CEK machine-specific 'EvaluationException'.
-type CekEvaluationExceptionD uni fun =
-    EvaluationException CekUserError (MachineError fun) (Term NamedDeBruijn uni fun ())
+-- TODO: unparameterize the `name` when we move to direct-debruijn api
+type CekEvaluationException name uni fun =
+    EvaluationException CekUserError (MachineError fun) (Term name uni fun ())
 
 -- | The set of constraints we need to be able to print things in universes, which we need in order to throw exceptions.
 type PrettyUni uni fun = (GShow uni, Closed uni, Pretty fun, Typeable uni, Typeable fun, Everywhere uni PrettyConst)
@@ -393,7 +394,7 @@ throwingDischarged
     -> CekM uni fun s x
 throwingDischarged l t = throwingWithCause l t . Just . dischargeCekValue
 
-instance PrettyUni uni fun => MonadError (CekEvaluationExceptionD uni fun) (CekM uni fun s) where
+instance PrettyUni uni fun => MonadError (CekEvaluationException NamedDeBruijn uni fun) (CekM uni fun s) where
     -- See Note [Throwing exceptions in ST].
     throwError = CekM . throwM
 
@@ -522,7 +523,7 @@ runCekM
     -> ExBudgetMode cost uni fun
     -> EmitterMode uni fun
     -> (forall s. GivenCekReqs uni fun s => CekM uni fun s a)
-    -> (Either (CekEvaluationExceptionD uni fun) a, cost, [Text])
+    -> (Either (CekEvaluationException NamedDeBruijn uni fun) a, cost, [Text])
 runCekM (MachineParameters costs runtime) (ExBudgetMode getExBudgetInfo) (EmitterMode getEmitterMode) a = runST $ do
     ExBudgetInfo{_exBudgetModeSpender, _exBudgetModeGetFinal, _exBudgetModeGetCumulative} <- getExBudgetInfo
     CekEmitterInfo{_cekEmitterInfoEmit, _cekEmitterInfoGetFinal} <- getEmitterMode _exBudgetModeGetCumulative
@@ -737,14 +738,14 @@ enterComputeCek = computeCek (toWordArray 0) where
 
 -- See Note [Compilation peculiarities].
 -- | Evaluate a term using the CEK machine and keep track of costing, logging is optional.
-runCek
+runCekDeBruijn
     :: ( uni `Everywhere` ExMemoryUsage, Ix fun, PrettyUni uni fun)
     => MachineParameters CekMachineCosts CekValue uni fun
     -> ExBudgetMode cost uni fun
     -> EmitterMode uni fun
     -> Term NamedDeBruijn uni fun ()
-    -> (Either (CekEvaluationExceptionD uni fun) (Term NamedDeBruijn uni fun ()), cost, [Text])
-runCek params mode emitMode term =
+    -> (Either (CekEvaluationException NamedDeBruijn uni fun) (Term NamedDeBruijn uni fun ()), cost, [Text])
+runCekDeBruijn params mode emitMode term =
     runCekM params mode emitMode $ do
         spendBudgetCek BStartup (cekStartupCost ?cekCosts)
         enterComputeCek NoFrame Env.empty term

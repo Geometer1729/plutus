@@ -12,7 +12,6 @@ import Common
 import PlutusCore qualified as PLC
 import PlutusCore.Evaluation.Machine.ExBudget qualified as PLC
 import PlutusTx.Code (CompiledCode, getPlc)
-import PlutusTx.Evaluation qualified as PlutusTx
 import UntypedPlutusCore qualified as UPLC
 import UntypedPlutusCore.Evaluation.Machine.Cek qualified as UPLC
 
@@ -41,5 +40,5 @@ measureBudget compiledCode =
    in case programE of
         Left _ -> Nothing
         Right program ->
-          let (_, UPLC.TallyingSt _ budget, _) = PlutusTx.evaluateCekTrace program
+          let (_, UPLC.TallyingSt _ budget) = UPLC.runCekNoEmit PLC.defaultCekParameters UPLC.tallying $ program ^. UPLC.progTerm
            in Just budget

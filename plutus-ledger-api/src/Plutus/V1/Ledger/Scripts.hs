@@ -33,7 +33,6 @@ module Plutus.V1.Ledger.Scripts(
     applyValidator,
     applyMintingPolicyScript,
     applyStakeValidatorScript,
-    mkTermToEvaluate,
     applyArguments,
     -- * Script wrappers
     mkValidatorScript,
@@ -81,11 +80,11 @@ import Plutus.V1.Ledger.Orphans ()
 import PlutusCore qualified as PLC
 import PlutusCore.Data qualified as PLC
 import PlutusCore.Evaluation.Machine.ExBudget qualified as PLC
+import PlutusCore.Evaluation.Machine.Exception (ErrorWithCause (..), EvaluationError (..))
 import PlutusCore.MkPlc qualified as PLC
 import PlutusTx (CompiledCode, FromData (..), ToData (..), UnsafeFromData (..), getPlc, makeLift)
 import PlutusTx.Builtins as Builtins
 import PlutusTx.Builtins.Internal as BI
-import PlutusTx.Evaluation (ErrorWithCause (..), EvaluationError (..))
 import PlutusTx.Prelude
 import Prettyprinter
 import Prettyprinter.Extras
@@ -182,14 +181,11 @@ applyArguments (Script (UPLC.Program a v t)) args =
         applied = PLC.mkIterApp () t termArgs
     in Script (UPLC.Program a v applied)
 
-mkTermToEvaluate :: Script -> UPLC.Program UPLC.NamedDeBruijn PLC.DefaultUni PLC.DefaultFun ()
-mkTermToEvaluate = UPLC.programMapNames UPLC.fakeNameDeBruijn . unScript
-
 -- | Evaluate a script, returning the trace log.
 evaluateScript :: forall m . (MonadError ScriptError m) => Script -> m (PLC.ExBudget, [Text])
 evaluateScript s = do
-    let p = mkTermToEvaluate s
-        (result, UPLC.TallyingSt _ budget, logOut) = UPLC.runCek PLC.defaultCekParameters UPLC.tallying UPLC.logEmitter t
+    let t = UPLC.termMapNames UPLC.fakeNameDeBruijn $ UPLC._progTerm $ unScript s
+        (result, UPLC.TallyingSt _ budget, logOut) = UPLC.runCekDeBruijn PLC.defaultCekParameters UPLC.tallying UPLC.logEmitter t
     case result of
         Right _ -> Haskell.pure (budget, logOut)
         Left errWithCause@(ErrorWithCause err cause) -> throwError $ case err of

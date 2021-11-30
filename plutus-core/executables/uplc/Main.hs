@@ -188,7 +188,7 @@ runEval (EvalOptions inp ifmt printMode budgetMode traceMode outputMode timingMo
     case budgetM of
         SomeBudgetMode bm -> evalWithTiming term >>= handleResults term
             where
-                evaluate = Cek.runCek cekparams bm emitM . fromRight (error "input contains free variables") . runExcept @UPLC.FreeVariableError . UPLC.deBruijnTerm
+                evaluate = Cek.runCekDeBruijn cekparams bm emitM . fromRight (error "input contains free variables") . runExcept @UPLC.FreeVariableError . UPLC.deBruijnTerm
                 evalWithTiming t = case timingMode of
                         NoTiming -> pure $ evaluate t
                         Timing n -> do
